@@ -1,0 +1,368 @@
+<!doctype html>
+<html>
+    <head>
+        <title>PostgreSQL Data Explorer</title>
+        <style>
+            body {
+                font-family: Arial, sans-serif;
+                margin: 20px;
+                line-height: 1.6;
+            }
+            h1,
+            h2 {
+                color: #333;
+            }
+            pre {
+                background: #f4f4f4;
+                padding: 10px;
+                border-radius: 5px;
+                overflow: auto;
+            }
+            button {
+                padding: 8px 12px;
+                background: #4caf50;
+                color: white;
+                border: none;
+                cursor: pointer;
+                margin: 5px;
+            }
+            input,
+            select,
+            textarea {
+                padding: 8px;
+                margin: 5px 0;
+                width: 100%;
+                box-sizing: border-box;
+            }
+            .container {
+                display: flex;
+            }
+            .sidebar {
+                width: 25%;
+                padding-right: 20px;
+            }
+            .main {
+                width: 75%;
+            }
+            table {
+                border-collapse: collapse;
+                width: 100%;
+            }
+            th,
+            td {
+                border: 1px solid #ddd;
+                padding: 8px;
+                text-align: left;
+            }
+            th {
+                background-color: #f2f2f2;
+            }
+        </style>
+    </head>
+    <body>
+        <h1>PostgreSQL Data Explorer</h1>
+        <div class="container">
+            <div class="sidebar">
+                <h2>Database Objects</h2>
+                <div id="schemas"></div>
+                <hr />
+                <h2>Analysis Prompts</h2>
+                <div id="prompts"></div>
+            </div>
+            <div class="main">
+                <h2>SQL Query</h2>
+                <textarea
+                    id="sqlQuery"
+                    rows="6"
+                    placeholder="Enter your SQL query here..."
+                ></textarea>
+                <button id="executeBtn">Execute Query</button>
+                <h2>Results</h2>
+                <div id="results"></div>
+            </div>
+        </div>
+
+        <script>
+            // Load schemas on page load
+            fetch("/api/schemas")
+                .then((response) => response.json())
+                .then((schemas) => {
+                    console.log(schemas);
+                    const schemasDiv = document.getElementById("schemas");
+                    schemas.forEach((schema) => {
+                        const schemaDiv = document.createElement("div");
+                        schemaDiv.innerHTML = "<strong>" + schema + "</strong>";
+
+                        // Add click event to load tables
+                        schemaDiv.style.cursor = "pointer";
+                        schemaDiv.onclick = () => loadTables(schema, schemaDiv);
+
+                        schemasDiv.appendChild(schemaDiv);
+                    });
+                })
+                .catch((error) =>
+                    console.error("Error loading schemas:", error),
+                );
+
+            // Load tables for a schema
+            function loadTables(schema, schemaDiv) {
+                // Check if tables are already loaded
+                if (schemaDiv.getAttribute("data-loaded") === "true") {
+                    const tablesDiv = schemaDiv.nextSibling;
+                    tablesDiv.style.display =
+                        tablesDiv.style.display === "none" ? "block" : "none";
+                    return;
+                }
+
+                fetch("/api/schemas/" + schema + "/tables")
+                    .then((response) => response.json())
+                    .then((tables) => {
+                        const tablesDiv = document.createElement("div");
+                        tablesDiv.style.paddingLeft = "20px";
+
+                        tables.forEach((table) => {
+                            const tableDiv = document.createElement("div");
+                            tableDiv.innerText = table;
+
+                            // Add click event to load schema
+                            tableDiv.style.cursor = "pointer";
+                            tableDiv.onclick = (e) => {
+                                e.stopPropagation();
+                                loadTableSchema(schema, table);
+                            };
+
+                            tablesDiv.appendChild(tableDiv);
+                        });
+
+                        schemaDiv.setAttribute("data-loaded", "true");
+                        schemaDiv.parentNode.insertBefore(
+                            tablesDiv,
+                            schemaDiv.nextSibling,
+                        );
+                    })
+                    .catch((error) =>
+                        console.error("Error loading tables:", error),
+                    );
+            }
+
+            // Load table schema - FIXED FUNCTION
+            function loadTableSchema(schema, table) {
+                fetch(
+                    "/api/schemas/" +
+                        encodeURIComponent(schema) +
+                        "/tables/" +
+                        encodeURIComponent(table),
+                )
+                    .then((response) => response.json())
+                    .then((columns) => {
+                        const resultsDiv = document.getElementById("results");
+
+                        // Safely escape the schema and table names for display
+                        const safeSchema =
+                            document.createTextNode(schema).textContent;
+                        const safeTable =
+                            document.createTextNode(table).textContent;
+
+                        let html =
+                            "<h3>Table: " +
+                            safeSchema +
+                            "." +
+                            safeTable +
+                            "</h3>";
+                        html +=
+                            "<table><tr><th>Column Name</th><th>Data Type</th><th>Nullable</th><th>Default</th><th>Max Length</th></tr>";
+
+                        columns.forEach((column) => {
+                            html += "<tr>";
+                            html +=
+                                "<td>" + (column.column_name || "") + "</td>";
+                            html += "<td>" + (column.data_type || "") + "</td>";
+                            html +=
+                                "<td>" + (column.is_nullable || "") + "</td>";
+                            html +=
+                                "<td>" +
+                                (column.column_default || "") +
+                                "</td>";
+                            html +=
+                                "<td>" +
+                                (column.character_maximum_length || "") +
+                                "</td>";
+                            html += "</tr>";
+                        });
+
+                        html += "</table>";
+
+                        // Use data attributes to store schema and table names for the button
+                        html +=
+                            '<button onclick="generateSelectQuery(this)" data-schema="' +
+                            safeSchema.replace(/"/g, "&quot;") +
+                            '" data-table="' +
+                            safeTable.replace(/"/g, "&quot;") +
+                            '">Generate SELECT Query</button>';
+
+                        resultsDiv.innerHTML = html;
+                    })
+                    .catch((error) =>
+                        console.error("Error loading table schema:", error),
+                    );
+            }
+
+            // Generate a SELECT query for a table - FIXED FUNCTION
+            function generateSelectQuery(buttonElement) {
+                const schema = buttonElement.getAttribute("data-schema");
+                const table = buttonElement.getAttribute("data-table");
+
+                fetch(
+                    "/api/schemas/" +
+                        encodeURIComponent(schema) +
+                        "/tables/" +
+                        encodeURIComponent(table),
+                )
+                    .then((response) => response.json())
+                    .then((columns) => {
+                        const columnNames = columns
+                            .map((c) => c.column_name)
+                            .join(", ");
+                        const query =
+                            "SELECT " +
+                            columnNames +
+                            "\nFROM " +
+                            schema +
+                            "." +
+                            table +
+                            "\nLIMIT 100;";
+                        document.getElementById("sqlQuery").value = query;
+                    })
+                    .catch((error) =>
+                        console.error("Error generating query:", error),
+                    );
+            }
+
+            // Execute SQL query
+            document
+                .getElementById("executeBtn")
+                .addEventListener("click", () => {
+                    const sql = document.getElementById("sqlQuery").value;
+
+                    fetch("/api/query", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ sql }),
+                    })
+                        .then((response) => response.json())
+                        .then((data) => {
+                            const resultsDiv =
+                                document.getElementById("results");
+
+                            if (data.error) {
+                                resultsDiv.innerHTML =
+                                    '<div style="color: red;">' +
+                                    data.error +
+                                    "</div>";
+                                return;
+                            }
+
+                            if (data.length === 0) {
+                                resultsDiv.innerHTML =
+                                    "<div>Query executed successfully. No results returned.</div>";
+                                return;
+                            }
+
+                            let html =
+                                "<h3>Query Results (" +
+                                data.length +
+                                " rows)</h3>";
+                            html += "<table><tr>";
+
+                            // Generate table headers from first row
+                            const headers = Object.keys(data[0]);
+                            headers.forEach((header) => {
+                                html += "<th>" + header + "</th>";
+                            });
+                            html += "</tr>";
+
+                            // Generate table rows
+                            data.forEach((row) => {
+                                html += "<tr>";
+                                headers.forEach((header) => {
+                                    const value =
+                                        row[header] !== null
+                                            ? String(row[header])
+                                            : "<i>null</i>";
+                                    html += "<td>" + value + "</td>";
+                                });
+                                html += "</tr>";
+                            });
+
+                            html += "</table>";
+                            resultsDiv.innerHTML = html;
+                        })
+                        .catch((error) => {
+                            console.error("Error executing query:", error);
+                            document.getElementById("results").innerHTML =
+                                '<div style="color: red;">Error executing query</div>';
+                        });
+                });
+
+            // Load analysis prompts
+            fetch("/api/analysis-prompts")
+                .then((response) => response.json())
+                .then((prompts) => {
+                    const promptsDiv = document.getElementById("prompts");
+
+                    // Create the categories
+                    Object.entries(prompts).forEach(
+                        ([category, categoryPrompts]) => {
+                            const categoryDiv = document.createElement("div");
+                            categoryDiv.innerHTML =
+                                "<strong>" +
+                                capitalizeFirstLetter(category) +
+                                "</strong>";
+
+                            // Add click event to expand/collapse
+                            categoryDiv.style.cursor = "pointer";
+                            categoryDiv.onclick = () => {
+                                const promptsList = categoryDiv.nextSibling;
+                                promptsList.style.display =
+                                    promptsList.style.display === "none"
+                                        ? "block"
+                                        : "none";
+                            };
+
+                            promptsDiv.appendChild(categoryDiv);
+
+                            // Create the prompts list
+                            const promptsList = document.createElement("div");
+                            promptsList.style.paddingLeft = "20px";
+                            promptsList.style.display = "none";
+
+                            categoryPrompts.forEach((prompt) => {
+                                const promptDiv = document.createElement("div");
+                                promptDiv.innerText = prompt.name;
+                                promptDiv.title = prompt.description;
+
+                                // Add click event to use the prompt
+                                promptDiv.style.cursor = "pointer";
+                                promptDiv.onclick = (e) => {
+                                    e.stopPropagation();
+                                    document.getElementById("sqlQuery").value =
+                                        prompt.query;
+                                };
+
+                                promptsList.appendChild(promptDiv);
+                            });
+
+                            promptsDiv.appendChild(promptsList);
+                        },
+                    );
+                })
+                .catch((error) =>
+                    console.error("Error loading prompts:", error),
+                );
+
+            function capitalizeFirstLetter(string) {
+                return string.charAt(0).toUpperCase() + string.slice(1);
+            }
+        </script>
+    </body>
+</html>
